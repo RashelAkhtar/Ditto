@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { adapterFor, isAnySourceFile } from '../src/Services/indexer/language/registry.ts';
-import { tsMorphAdapter } from '../src/Services/indexer/language/adapter.ts';
-import { pythonAdapter } from '../src/Services/indexer/language/python/adapter.ts';
+import { adapterFor, isAnySourceFile } from '../src/Services/indexer/language/registry.js';
+import { tsMorphAdapter } from '../src/Services/indexer/language/adapter.js';
+import { pythonAdapter } from '../src/Services/indexer/language/python/adapter.js';
 
 describe('Language Registry - adapterFor', () => {
   it('routes Python files to the Python adapter', () => {
