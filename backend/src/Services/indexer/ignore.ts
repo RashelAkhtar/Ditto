@@ -1,4 +1,6 @@
 import ignore from 'ignore';
+import { parsePairSuppressions, type RawSuppressionRule } from './suppression.js';
+import logger from '../../Config/logger.js';
 
 export interface IgnoreMatcher {
   /** True when repo-relative path matches one of the ignore patterns */
@@ -7,6 +9,67 @@ export interface IgnoreMatcher {
   patterns: string[];
 }
 
+export interface ParsedDittoConfig {
+  filePatterns: string[];
+  rawSuppressions: RawSuppressionRule[];
+}
+
+/**
+ * Rigorously splits .dittoignore upstream:
+ * - filePatterns (globs) passed exclusively to ignore()
+ * - rawSuppressions passed to the pair engine
+ */
+export const parseDittoFile = (content?: string): ParsedDittoConfig => {
+  if (!content) {
+    return { filePatterns: [], rawSuppressions: [] };
+  }
+
+  const lines = content.split(/\r?\n/);
+  const fileLines: string[] = [];
+  const suppressionLines: string[] = [];
+
+  let currentSection: 'files' | 'suppressions' = 'files';
+
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+
+    const commentIdx = trimmed.indexOf('#');
+    const lineWithoutComment = (commentIdx !== -1 ? trimmed.slice(0, commentIdx) : trimmed).trim();
+
+    if (lineWithoutComment.startsWith('[') && lineWithoutComment.endsWith(']')) {
+      const header = lineWithoutComment.toLowerCase();
+      if (header === '[files]') {
+        currentSection = 'files';
+        continue;
+      }
+      if (header === '[suppressions]') {
+        currentSection = 'suppressions';
+        continue;
+      }
+      logger.warn(`[DITTOIGNORE] Unknown section header '${lineWithoutComment}' ignored.`);
+      continue;
+    }
+
+    if (currentSection === 'files') {
+      fileLines.push(trimmed);
+    } else {
+      suppressionLines.push(rawLine);
+    }
+  }
+
+  const parsedSuppressions = parsePairSuppressions(suppressionLines.join('\n'));
+
+  for (const m of parsedSuppressions.malformed) {
+    logger.warn(`[DITTOIGNORE] Malformed suppression rule: "${m.rawLine}" — ${m.error}`);
+  }
+
+  return {
+    filePatterns: fileLines,
+    rawSuppressions: parsedSuppressions.rules,
+  };
+};
+
 /**
  * Parses raw .dittoignore file contents into clean glob patterns.
  * - Strips leading/trailing whitespace.
@@ -14,12 +77,7 @@ export interface IgnoreMatcher {
  * - Discards comment lines starting with '#'.
  */
 export const parseIgnorePatterns = (content?: string): string[] => {
-  if (!content) return [];
-
-  return content
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !line.startsWith('#'));
+  return parseDittoFile(content).filePatterns;
 };
 
 export const createIgnoreMatcher = (patterns: string[]): IgnoreMatcher => {

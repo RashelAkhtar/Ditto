@@ -173,4 +173,20 @@ describe('computeRepoStats', () => {
     expect(stats.semanticDuplicateClusters).toBe(0);
     expect(stats.reusableUtilities).toBe(4);
   });
+
+  it('excludes suppressed clusters from health score debt while reporting them honestly', () => {
+    const suppressed: StatsCluster = {
+      ...confirmed,
+      isSuppressed: true,
+    };
+    const stats = computeRepoStats(functions, [suppressed]);
+
+    expect(stats.semanticDuplicateClusters).toBe(0);
+    expect(stats.behavioralConflicts).toBe(0);
+    expect(stats.healthScore).toBe(100);
+    expect(stats.suppressedClusters).toBe(1);
+    expect(stats.linesRemovable).toBe(0);
+    expect(stats.callSitesUnifiable).toBe(0);
+    expect(stats.suspectedReinvented).toBe(0);
+  });
 });

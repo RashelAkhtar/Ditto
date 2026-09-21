@@ -23,6 +23,11 @@ export interface ICluster {
   /** JSON-encoded arg arrays, e.g. '["00919876543210"]'. */
   probeInputs: string[];
   divergence?: DivergenceTable;
+  /**
+   *  Note: suppression mutes duplicate alerts, never a proven divergence.
+   */
+  isSuppressed?: boolean;
+  suppressionReason?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -93,6 +98,8 @@ const clusterSchema = new mongoose.Schema<ICluster>(
     cohesion: { type: Number, default: 0 },
     probeInputs: { type: [String], default: [] },
     divergence: { type: divergenceSchema, default: undefined },
+    isSuppressed: { type: Boolean, default: false },
+    suppressionReason: { type: String, default: undefined },
   },
   {
     timestamps: true,

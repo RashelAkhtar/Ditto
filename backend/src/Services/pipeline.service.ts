@@ -24,6 +24,14 @@ import {
   type StageReporter,
 } from '../Models/index.js';
 import type { HydratedDocument } from 'mongoose';
+import {
+  createSuppressionMatcher,
+  evaluateClusterSuppression,
+  logSuppressionDiagnostics,
+  resolveSuppressions,
+  type SuppressionMatcher,
+} from './indexer/suppression.js';
+import { parseDittoFile } from './indexer/ignore.js';
 
 /**
  * THE PIPELINE.
@@ -74,6 +82,7 @@ export interface PipelineOptions {
   candidateCap?: number;
   /** Live-progress reporter — fires at each pipeline stage boundary. */
   onStage?: StageReporter;
+  dittoIgnoreContent?: string;
 }
 
 export interface PipelineReport {
@@ -107,10 +116,14 @@ interface PipelineServiceDeps {
 
 const unwrapCacheFile = (
   data: ExtractorCacheFile
-): { functions: ExtractedFunction[]; commit: string } =>
+): { functions: ExtractedFunction[]; commit: string; dittoIgnoreContent?: string } =>
   Array.isArray(data)
     ? { functions: data, commit: 'unknown' }
-    : { functions: data.functions, commit: data.commit ?? 'unknown' };
+    : {
+        functions: data.functions,
+        commit: data.commit ?? 'unknown',
+        dittoIgnoreContent: data.dittoIgnoreContent,
+      };
 
 const toClusterable = (doc: HydratedDocument<IFunction>): ClusterableFunction => ({
   id: doc._id.toString(),
@@ -149,14 +162,25 @@ class PipelineService {
   }
 
   async run(options: PipelineOptions): Promise<PipelineReport> {
-    const { owner, name, cacheDir = DEFAULT_CACHE_DIR, maxFunctions, candidateCap, onStage } = options;
+    const {
+      owner,
+      name,
+      cacheDir = DEFAULT_CACHE_DIR,
+      maxFunctions,
+      candidateCap,
+      onStage,
+    } = options;
 
     // The live path supplies functions in memory; the local CLI reads the cache
     // the indexer wrote. Either way, the total is captured BEFORE any cap so the
     // truncation signal is honest.
     const extracted =
       options.functions !== undefined
-        ? { functions: options.functions, commit: options.commit ?? 'unknown' }
+        ? {
+            functions: options.functions,
+            commit: options.commit ?? 'unknown',
+            dittoIgnoreContent: options.dittoIgnoreContent,
+          }
         : await this.readExtractorCache(owner, name, cacheDir);
     const functionsTotal = options.functionsTotal ?? extracted.functions.length;
     let functions = extracted.functions;
@@ -274,14 +298,40 @@ class PipelineService {
 
     // ---- stage 5: probe (deterministic, 0 tokens) ----
     await onStage?.('probe');
+
+    let suppressionMatcher: SuppressionMatcher | undefined;
+
+    const dittoIgnoreContent = options.dittoIgnoreContent ?? extracted.dittoIgnoreContent;
+    if (dittoIgnoreContent) {
+      const parsedDitto = parseDittoFile(dittoIgnoreContent);
+      const resolution = resolveSuppressions(parsedDitto.rawSuppressions, saved);
+      logSuppressionDiagnostics(resolution);
+      suppressionMatcher = createSuppressionMatcher(resolution);
+    }
+
     const limit = pLimit(PROBE_CONCURRENCY);
     const clusterDocs = await Promise.all(
       adjudicated.clusters.map((cluster) =>
         limit(async (): Promise<Partial<ICluster>> => {
-          const members = cluster.memberIds.map((id) => {
-            const doc = byId.get(id);
+          const memberDocs = cluster.memberIds
+            .map((id) => byId.get(id))
+            .filter((doc): doc is HydratedDocument<IFunction> => Boolean(doc));
+
+          const memberHashes = memberDocs.map((doc) => doc.bodyHash);
+
+          let isClusterSuppressed = false;
+          let suppressionReason: string | undefined;
+
+          if (suppressionMatcher && memberHashes.length >= 2) {
+            const evalResult = evaluateClusterSuppression(memberHashes, suppressionMatcher);
+            isClusterSuppressed = evalResult.suppressed;
+            suppressionReason =
+              evalResult.reasons.length > 0 ? evalResult.reasons.join('; ') : undefined;
+          }
+
+          const members = memberDocs.map((doc) => {
             return {
-              id,
+              id: doc._id.toString(),
               body: doc?.body ?? '',
               isPure: doc?.isPure ?? false,
               language: (doc?.language as 'ts' | 'python' | undefined) ?? 'ts',
@@ -303,6 +353,8 @@ class PipelineService {
             cohesion: cohesionByKey.get(clusterKey(cluster.memberIds)) ?? 0,
             probeInputs: cluster.probeInputs,
             ...(divergence ? { divergence } : {}),
+            isSuppressed: isClusterSuppressed,
+            ...(suppressionReason ? { suppressionReason } : {}),
           };
         })
       )
@@ -364,7 +416,7 @@ class PipelineService {
     owner: string,
     name: string,
     cacheDir: string
-  ): Promise<{ functions: ExtractedFunction[]; commit: string }> {
+  ): Promise<{ functions: ExtractedFunction[]; commit: string; dittoIgnoreContent?: string }> {
     const file = path.join(cacheDir, `${owner}-${name}.json`);
 
     let raw: string;
@@ -409,6 +461,7 @@ const toStatsCluster = (doc: Partial<ICluster>): StatsCluster => ({
   canonicalId: doc.canonicalId?.toString() ?? '',
   confidence: doc.confidence ?? 0,
   disagreementRisk: doc.disagreementRisk ?? 'none',
+  isSuppressed: doc.isSuppressed ?? false,
 });
 
 export default PipelineService;

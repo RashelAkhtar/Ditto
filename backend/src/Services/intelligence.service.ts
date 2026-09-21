@@ -64,6 +64,8 @@ const toClusterSummary = (
   disagreementRisk: cluster.disagreementRisk,
   hasProvenDivergence: hasProvenDivergence(cluster),
   linesRemovable: linesRemovableFor(cluster, locById),
+  isSuppressed: Boolean(cluster.isSuppressed),
+  ...(cluster.suppressionReason ? { suppressionReason: cluster.suppressionReason } : {}),
 });
 
 class IntelligenceService {
