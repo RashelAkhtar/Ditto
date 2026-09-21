@@ -69,7 +69,9 @@ export function parsePullRequest(input: string): GitHubPullRequestRef | null {
   // owner / name / pull / <number>
   if (parts.length < 4) return null;
 
-  const [owner, name, kind, numRaw] = parts;
+  const [owner, rawName, kind, numRaw] = parts;
+  const name = rawName.replace(/\.git$/i, '');
+
   if (kind.toLowerCase() !== 'pull') return null;
   if (!NAME.test(owner) || !NAME.test(name)) return null;
 
