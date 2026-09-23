@@ -12,6 +12,7 @@ export interface IgnoreMatcher {
 export interface ParsedDittoConfig {
   filePatterns: string[];
   rawSuppressions: RawSuppressionRule[];
+  malformedSuppressions: Array<{ rawLine: string; error: string }>;
 }
 
 /**
@@ -21,7 +22,7 @@ export interface ParsedDittoConfig {
  */
 export const parseDittoFile = (content?: string): ParsedDittoConfig => {
   if (!content) {
-    return { filePatterns: [], rawSuppressions: [] };
+    return { filePatterns: [], rawSuppressions: [], malformedSuppressions: [] };
   }
 
   const lines = content.split(/\r?\n/);
@@ -60,13 +61,10 @@ export const parseDittoFile = (content?: string): ParsedDittoConfig => {
 
   const parsedSuppressions = parsePairSuppressions(suppressionLines.join('\n'));
 
-  for (const m of parsedSuppressions.malformed) {
-    logger.warn(`[DITTOIGNORE] Malformed suppression rule: "${m.rawLine}" — ${m.error}`);
-  }
-
   return {
     filePatterns: fileLines,
     rawSuppressions: parsedSuppressions.rules,
+    malformedSuppressions: parsedSuppressions.malformed,
   };
 };
 
